@@ -1,4 +1,4 @@
-﻿name: Publish to npm
+name: Publish to npm
 
 # 打 tag（v*）时发布以下两个包到 npm：
 #   - @huaweicloud/huaweicloud-sdk-agentidentity（先发，主包依赖它）
@@ -162,6 +162,10 @@ jobs:
             local name="$1"
             local required_file="$2"
             local tarball
+            local slug
+            local file_list
+            local package_json
+
             tarball="$(pnpm --filter "${name}" pack --pack-destination "${PACK_DIR}" | tail -n 1)"
 
             if [[ ! -f "${tarball}" ]]; then
@@ -169,20 +173,29 @@ jobs:
               exit 1
             fi
 
+            slug="$(printf '%s' "${name}" | tr '/@' '__')"
+            file_list="${PACK_DIR}/${slug}.files.txt"
+            package_json="${PACK_DIR}/${slug}.package.json"
+
+            # 先把列表/package.json 完整写入文件再匹配：`grep -q` 命中后会提前关闭管道，
+            # 导致 tar 收到 SIGPIPE（`tar: stdout: write error`），在 pipefail 下会被误判为失败。
+            tar -tzf "${tarball}" > "${file_list}"
+            tar -xOf "${tarball}" package/package.json > "${package_json}"
+
             echo "Packed ${name} -> ${tarball}"
-            if ! tar -tzf "${tarball}" | grep -qx "package/dist/index.js"; then
+            if ! grep -qx "package/dist/index.js" "${file_list}"; then
               echo "::error::${name} tarball is missing dist/index.js"
               exit 1
             fi
-            if ! tar -tzf "${tarball}" | grep -qx "package/README.md"; then
+            if ! grep -qx "package/README.md" "${file_list}"; then
               echo "::error::${name} tarball is missing README.md"
               exit 1
             fi
-            if [[ -n "${required_file}" ]] && ! tar -tzf "${tarball}" | grep -qx "${required_file}"; then
+            if [[ -n "${required_file}" ]] && ! grep -qx "${required_file}" "${file_list}"; then
               echo "::error::${name} tarball is missing ${required_file}"
               exit 1
             fi
-            if tar -xOf "${tarball}" package/package.json | grep -q '"workspace:'; then
+            if grep -q '"workspace:' "${package_json}"; then
               echo "::error::${name} tarball still contains 'workspace:' dependencies (pnpm should rewrite them)"
               exit 1
             fi
